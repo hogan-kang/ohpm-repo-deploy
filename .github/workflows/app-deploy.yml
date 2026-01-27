@@ -1,0 +1,65 @@
+name: App Build & Deploy to ECS (Fargate)
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch: {}
+
+jobs:
+  build-and-deploy:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v2
+        with:
+          aws-region: ${{ secrets.AWS_REGION }}
+          role-to-assume: ${{ secrets.AWS_OIDC_ROLE }} # optional if using OIDC
+
+      - name: Login to ECR
+        uses: aws-actions/amazon-ecr-login@v1
+
+      - name: Build, tag, push image
+        env:
+          ECR_REGISTRY: ${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.${{ secrets.AWS_REGION }}.amazonaws.com
+          ECR_REPOSITORY: ${{ secrets.ECR_REPOSITORY }}
+          IMAGE_TAG: ${{ github.sha }}
+        run: |
+          docker build -t $ECR_REPOSITORY:$IMAGE_TAG -f Dockerfile.template .
+          docker tag $ECR_REPOSITORY:$IMAGE_TAG $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG
+          aws ecr describe-repositories --repository-names $ECR_REPOSITORY || aws ecr create-repository --repository-name $ECR_REPOSITORY
+          docker push $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG
+
+      - name: Update ECS service
+        uses: aws-actions/amazon-ecs-deploy-task-definition@v1
+        with:
+          # To use this action you need to register a new task definition JSON with new image and call update-service
+          cluster: ${{ secrets.ECS_CLUSTER_NAME }}
+          service: ${{ secrets.ECS_SERVICE_NAME }}
+          task-definition: |
+            [
+              {
+                "family": "${{ secrets.ECS_TASK_FAMILY }}",
+                "networkMode": "awsvpc",
+                "executionRoleArn": "${{ secrets.ECS_EXEC_ROLE }}",
+                "containerDefinitions": [
+                  {
+                    "name": "${{ secrets.CONTAINER_NAME }}",
+                    "image": "${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.${{ secrets.AWS_REGION }}.amazonaws.com/${{ secrets.ECR_REPOSITORY }}:${{ github.sha }}",
+                    "essential": true,
+                    "portMappings": [{"containerPort": 8080, "protocol": "tcp"}],
+                    "logConfiguration": {"logDriver":"awslogs","options": {"awslogs-group":"/ecs/${{ secrets.ECS_SERVICE_NAME }}","awslogs-region":"${{ secrets.AWS_REGION }}","awslogs-stream-prefix":"ecs"}}
+                  }
+                ],
+                "requiresCompatibilities": ["FARGATE"],
+                "cpu": "512",
+                "memory": "1024",
+                "runtimePlatform": {"operatingSystemFamily": "LINUX"}
+              }
+            ]

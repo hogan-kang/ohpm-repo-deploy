@@ -1,0 +1,21 @@
+# Dockerfile template for ohpm-repo
+# Replace stages and build steps depending on your application's language.
+
+# Example: a generic Node.js app build
+FROM node:18-alpine AS build
+WORKDIR /app
+COPY package*.json ./
+RUN npm install --production=false
+COPY . .
+RUN npm run build || true
+
+FROM node:18-alpine
+WORKDIR /app
+COPY --from=build /app/package*.json ./
+COPY --from=build /app/dist ./dist
+RUN npm install --production=true
+ENV PORT=8080
+EXPOSE 8080
+CMD ["node", "dist/index.js"]
+
+# If your app is Java/Spring Boot, replace with a multi-stage maven/jib build.
