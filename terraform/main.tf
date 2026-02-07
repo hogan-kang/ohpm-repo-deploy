@@ -1,8 +1,4 @@
-locals {
-  name_prefix = "${var.project}-${var.env}"
-}
-// Dev-friendly mode: optionally use the AWS default VPC and public subnets (no ALB, no NAT)
-
+// Fetch default VPC and subnets
 data "aws_vpc" "default" {
   default = true
 }
@@ -14,35 +10,17 @@ data "aws_subnets" "default" {
   }
 }
 
-# 1) VPC (using terraform-aws-modules) - create only when use_default_vpc = false
-module "vpc" {
-  source  = "terraform-aws-modules/vpc/aws"
-  version = "~> 3.0"
-
-  count = var.use_default_vpc ? 0 : 1
-
-  name = local.name_prefix
-  cidr = var.vpc_cidr
-
-  azs             = ["${var.aws_region}a", "${var.aws_region}b"]
-  public_subnets  = var.public_subnets
-  private_subnets = var.private_subnets
-
-  enable_nat_gateway = false
-  single_nat_gateway = false
-}
-
+// Local variables
 locals {
   name_prefix   = "${var.project}-${var.env}"
-  vpc_id        = var.use_default_vpc ? data.aws_vpc.default.id : module.vpc[0].vpc_id
-  public_subnets = var.use_default_vpc ? data.aws_subnets.default.ids : module.vpc[0].public_subnets
-  private_subnets = var.use_default_vpc ? data.aws_subnets.default.ids : module.vpc[0].private_subnets
+  vpc_id        = data.aws_vpc.default.id
+  public_subnets = data.aws_subnets.default.ids
 }
 
-# Security group for ECS tasks: allow container port from internet (dev mode)
+# ECS Security Group
 resource "aws_security_group" "ecs_sg" {
   name        = "${local.name_prefix}-ecs-sg"
-  description = "Allow inbound to container port"
+  description = "ECS and EFS security group"
   vpc_id      = local.vpc_id
 
   ingress {
@@ -60,25 +38,13 @@ resource "aws_security_group" "ecs_sg" {
   }
 }
 
-# ECR
-resource "aws_ecr_repository" "repo" {
-  name                 = "${local.name_prefix}"
-  image_tag_mutability = "MUTABLE"
-  image_scanning_configuration {
-    scan_on_push = true
-  }
-}
-
-output "ecr_repository_url" {
-  value = aws_ecr_repository.repo.repository_url
-}
-
-# IAM roles for ECS task
+# ECS IAM Role
 resource "aws_iam_role" "ecs_task_execution_role" {
   name = "${local.name_prefix}-exec-role"
   assume_role_policy = data.aws_iam_policy_document.ecs_task_assume.json
 }
 
+// ECS task trust policy
 data "aws_iam_policy_document" "ecs_task_assume" {
   statement {
     actions = ["sts:AssumeRole"]
@@ -89,6 +55,7 @@ data "aws_iam_policy_document" "ecs_task_assume" {
   }
 }
 
+# Attach execution policy
 resource "aws_iam_role_policy_attachment" "ecs_task_execution_attach" {
   role       = aws_iam_role.ecs_task_execution_role.name
   policy_arn = "arn:aws:iam::aws:policy/service-role/AmazonECSTaskExecutionRolePolicy"
@@ -99,18 +66,55 @@ resource "aws_ecs_cluster" "cluster" {
   name = "${local.name_prefix}-cluster"
 }
 
-# Task Definition
+# EFS File System
+resource "aws_efs_file_system" "app_efs" {
+  creation_token = "${local.name_prefix}-efs"
+  
+  lifecycle_policy {
+    transition_to_ia = "AFTER_30_DAYS"
+  }
+
+  performance_mode = "generalPurpose"
+  throughput_mode = "elastic"
+
+  tags = {
+    Name = "${local.name_prefix}-efs"
+  }
+}
+
+# EFS Mount Target
+resource "aws_efs_mount_target" "efs_mount" {
+  count = 1
+
+  file_system_id  = aws_efs_file_system.app_efs.id
+  subnet_id       = local.public_subnets[0]
+  security_groups = [aws_security_group.ecs_sg.id]
+}
+
+# NFS Security Group Rule
+resource "aws_security_group_rule" "efs_ingress" {
+  type              = "ingress"
+  from_port         = 2049
+  to_port           = 2049
+  protocol          = "tcp"
+  cidr_blocks       = ["0.0.0.0/0"]
+  security_group_id = aws_security_group.ecs_sg.id
+  description       = "NFS for EFS"
+}
+
+# ECS Task Definition
 resource "aws_ecs_task_definition" "task" {
   family                   = "${local.name_prefix}-task"
-  cpu                      = "512"
-  memory                   = "1024"
+  cpu                      = "256"
+  memory                   = "512"
   network_mode             = "awsvpc"
   requires_compatibilities = ["FARGATE"]
   execution_role_arn       = aws_iam_role.ecs_task_execution_role.arn
-  container_definitions    = jsonencode([
+  
+  container_definitions = jsonencode([
     {
       name      = "${local.name_prefix}"
-      image     = var.container_image != "" ? var.container_image : aws_ecr_repository.repo.repository_url
+      image     = var.container_image
       essential = true
       portMappings = [
         {
@@ -119,24 +123,33 @@ resource "aws_ecs_task_definition" "task" {
           protocol      = "tcp"
         }
       ]
-      logConfiguration = {
-        logDriver = "awslogs"
-        options = {
-          awslogs-group         = "/ecs/${local.name_prefix}"
-          awslogs-region        = var.aws_region
-          awslogs-stream-prefix = "ecs"
+      mountPoints = [
+        {
+          sourceVolume  = "efs-storage"
+          containerPath = "/usr/share/nginx/html"
+          readOnly      = false
         }
-      }
+      ]
+      stopTimeout = 30
     }
   ])
+  
+  volume {
+    name = "efs-storage"
+    
+    efs_volume_configuration {
+      file_system_id = aws_efs_file_system.app_efs.id
+      root_directory = "/"
+    }
+  }
 }
 
-# ECS Service (Fargate) - running in public subnets with public IP (dev mode)
+# ECS Service
 resource "aws_ecs_service" "service" {
   name            = "${local.name_prefix}-service"
   cluster         = aws_ecs_cluster.cluster.id
   task_definition = aws_ecs_task_definition.task.arn
-  desired_count   = var.desired_count
+  desired_count   = 0
   launch_type     = "FARGATE"
 
   network_configuration {
