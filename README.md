@@ -1,160 +1,125 @@
 # ohpm-repo-deploy
 
-最小化ECS+EFS网站测试部署方案，完全免费套餐兼容。
+Minimal ECS + EFS test deployment tailored to fit within the AWS Free Tier where possible.
 
-## 📦 项目结构
+## 📦 Project Structure
 
 ```
 ohpm-repo-deploy/
-├── .git/                    # 版本控制
-├── .gitignore              # Git忽略文件
-├── README.md               # 项目说明
-└── terraform/              # Terraform配置
-    ├── main.tf             # 主配置（ECS/EFS资源）
-    ├── variables.tf        # 变量定义
-    ├── providers.tf        # AWS Provider配置
-    ├── dev.tfvars          # 开发环境配置
-    ├── .terraform/         # 本地缓存（勿提交）
-    └── .terraform.lock.hcl # 版本锁定
+├── .git/                    # Git repository
+├── .gitignore               # Git ignore rules
+├── README.md                # Project documentation
+└── terraform/               # Terraform configuration
+    ├── main.tf              # Core resources (ECS/EFS)
+    ├── variables.tf         # Variable definitions
+    ├── providers.tf         # AWS provider config
+    ├── dev.tfvars           # Development environment variables
+    ├── .terraform/          # Local plugin cache (do not commit)
+    └── .terraform.lock.hcl  # Provider lock file
 ```
 
-## ⚡ 快速开始
+## ⚡ Quick Start
 
-### 前置条件
+### Prerequisites
 
 ```bash
-# 安装Terraform（v1.1.0以上）
+# Install Terraform (>= v1.1.0)
 terraform --version
 
-# 配置AWS凭证
-export AWS_REGION=us-east-1
+# Configure AWS credentials
+export AWS_REGION=ap-east-1
 export AWS_ACCESS_KEY_ID=your_key
 export AWS_SECRET_ACCESS_KEY=your_secret
 
-# 或创建~/.aws/credentials文件
+# Or set up ~/.aws/credentials
 ```
 
-### 部署步骤
+### Deploy
 
 ```bash
-# 1. 进入Terraform目录
+# 1. Change into the Terraform folder
 cd terraform
 
-# 2. 初始化（下载providers）
+# 2. Initialize (download providers)
 terraform init
 
-# 3. 查看部署计划（预览资源）
+# 3. Preview the plan
 terraform plan -var-file=dev.tfvars
 
-# 4. 创建资源
+# 4. Apply the plan
 terraform apply -var-file=dev.tfvars
-# 输入 yes 确认
+# Type yes to confirm
 
-# 5. 获取输出信息
+# 5. Show outputs
 terraform output
 ```
 
-### 启动网站服务
+### Start the web service
 
-部署完成后，需手动启动ECS任务：
+After Terraform finishes, start an ECS task to run the web container manually:
 
 ```bash
-# 获取网络配置（或从AWS Console查看）
-SUBNET_ID=$(aws ec2 describe-subnets --region us-east-1 --query 'Subnets[0].SubnetId' --output text)
-SG_ID=$(aws ec2 describe-security-groups --filters "Name=group-name,Values=ohpm-repo-dev-ecs-sg" --region us-east-1 --query 'SecurityGroups[0].GroupId' --output text)
+# Get network info (or view in AWS Console)
+SUBNET_ID=$(aws ec2 describe-subnets --region ap-east-1 --query 'Subnets[0].SubnetId' --output text)
+SG_ID=$(aws ec2 describe-security-groups --filters "Name=group-name,Values=ohpm-repo-dev-ecs-sg" --region ap-east-1 --query 'SecurityGroups[0].GroupId' --output text)
 
-# 启动任务（运行1个nginx容器）
+# Run a single nginx container as a Fargate task
 aws ecs run-task \
   --cluster ohpm-repo-dev-cluster \
   --task-definition ohpm-repo-dev-task \
   --launch-type FARGATE \
   --network-configuration "awsvpcConfiguration={subnets=[$SUBNET_ID],securityGroups=[$SG_ID],assignPublicIp=ENABLED}" \
   --count 1 \
-  --region us-east-1
+  --region ap-east-1
 ```
 
-## 📊 配置说明
+## 📊 Configuration
 
-编辑 `terraform/dev.tfvars` 自定义部署：
+Edit `terraform/dev.tfvars` to customize the deployment:
 
 ```hcl
-# AWS区域
-aws_region      = "us-east-1"
+# AWS region
+aws_region      = "ap-east-1"
 
-# 项目标识
+# Project identifiers
 project         = "ohpm-repo"
 env             = "dev"
 
-# 容器配置
+# Container settings
 container_port  = 80
 container_image = "nginx:alpine"
 ```
 
-## 💰 费用估算
+## 💰 Cost Estimate
 
-| 项目 | 成本 | 说明 |
-|------|------|------|
-| ECS Fargate | $0-4 | 256 CPU/512MB内免费 |
-| EFS挂载目标 | $3.6 | $0.12/天×30天 |
-| EFS存储 | <$1 | 10GB内免费 |
-| **合计** | **~$4/月** | ✅ 完全免费套餐内 |
+| Item | Estimated Cost | Notes |
+|------|----------------|-------|
+| ECS Fargate | $0–$4 | Small Fargate tasks may fit in the free tier for light testing |
+| EFS Mount Target | $3.6 | ~ $0.12/day × 30 days |
+| EFS Storage | <$1 | Small amounts of storage may remain within free usage |
+| **Total** | **~$4/month** | Approximate for minimal testing |
 
-## 📋 资源清单
+## 📋 Resources Created
 
-部署会创建以下12个资源：
+Typical resources created by this configuration include:
 
-- **网络**：Security Group (HTTP/NFS)、默认VPC
-- **计算**：ECS Cluster、ECS Service、ECS Task Definition
-- **存储**：EFS File System、EFS Mount Target
-- **权限**：IAM Role、IAM Policy
+- Network: Security Group (HTTP/NFS), default VPC
+- Compute: ECS Cluster, ECS Service, ECS Task Definition
+- Storage: EFS File System, EFS Mount Target
+- Permissions: IAM Role, IAM Policy
 
-## 🧪 测试示例
+## 📝 File Summary
 
-```bash
-# 查看集群
-aws ecs describe-clusters --clusters ohpm-repo-dev-cluster
-
-# 查看任务
-aws ecs list-tasks --cluster ohpm-repo-dev-cluster
-
-# 查看任务详情（包含公网IP）
-aws ecs describe-tasks --cluster ohpm-repo-dev-cluster --tasks <task-arn>
-
-# 停止任务
-aws ecs stop-task --cluster ohpm-repo-dev-cluster --task <task-arn>
-```
-
-## 🗑️ 清理资源
-
-```bash
-# 销毁所有AWS资源
-terraform destroy -var-file=dev.tfvars
-# 输入 yes 确认
-
-# 或只销毁特定资源
-terraform destroy -target=aws_ecs_service.service
-```
-
-## ✅ 最佳实践
-
-- ✅ 使用`terraform plan`预览更改
-- ✅ 不需要时及时销毁资源
-- ✅ 定期检查AWS成本告警
-- ✅ 敏感信息使用环境变量或AWS IAM
-- ✅ 提交前检查`.gitignore`
-
-## 📝 文件说明
-
-| 文件 | 说明 |
-|------|------|
-| `main.tf` | ECS集群、任务定义、EFS等核心资源 |
-| `variables.tf` | 所有变量定义和默认值 |
-| `providers.tf` | AWS Provider配置和版本锁定 |
-| `dev.tfvars` | 开发环境的变量赋值 |
-| `.gitignore` | Git忽略规则（保护敏感文件） |
+| File | Purpose |
+|------|---------|
+| main.tf | Core resources: ECS cluster, task definition, EFS, etc. |
+| variables.tf | Variable declarations and defaults |
+| providers.tf | AWS provider configuration and version constraints |
+| dev.tfvars | Development environment variable values |
+| .gitignore | Git ignore rules (protect sensitive files) |
 
 ---
 
-**创建于**: 2026-02-07  
-**Terraform版本**: >= 1.1.0  
-**AWS提供商**: >= 4.0
+**Created**: 2026-02-07  
+**Recommended Terraform**: >= 1.1.0  
+**AWS Provider**: >= 4.0

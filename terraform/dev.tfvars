@@ -1,7 +1,7 @@
 # Development Environment Configuration - Cost Optimized
 
-# AWS Region: us-east-1 (lowest cost)
-aws_region      = "us-east-1"
+# AWS Region: Hong Kong (ap-east-1)
+aws_region      = "ap-east-1"
 
 # Project Identifier
 project         = "ohpm-repo"

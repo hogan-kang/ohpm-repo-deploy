@@ -1,8 +1,8 @@
 // AWS Region Configuration
 variable "aws_region" {
-  description = "AWS deployment region - us-east-1 has lowest cost"
+  description = "AWS deployment region (set to ap-east-1 for Hong Kong)"
   type        = string
-  default     = "us-east-1"
+  default     = "ap-east-1"
 }
 
 // Project Identifier
