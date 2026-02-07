@@ -5,6 +5,13 @@ variable "aws_region" {
   default     = "ap-east-1"
 }
 
+// Desired count for ECS service
+variable "desired_count" {
+  description = "Number of desired tasks for the ECS service"
+  type        = number
+  default     = 1
+}
+
 // Project Identifier
 variable "project" {
   description = "Project name identifier"

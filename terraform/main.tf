@@ -82,7 +82,7 @@ resource "aws_efs_file_system" "app_efs" {
   }
 }
 
-# EFS Mount Target
+# EFS Mount Target 
 resource "aws_efs_mount_target" "efs_mount" {
   count = 1
 
@@ -131,6 +131,11 @@ resource "aws_ecs_task_definition" "task" {
         }
       ]
       stopTimeout = 30
+      command = [
+        "sh",
+        "-c",
+        "echo '<html><body><h1>Hello from EFS!</h1><p>Test page created at: $(date)</p></body></html>' > /usr/share/nginx/html/index.html && nginx -g 'daemon off;'"
+      ]
     }
   ])
   
@@ -149,11 +154,11 @@ resource "aws_ecs_service" "service" {
   name            = "${local.name_prefix}-service"
   cluster         = aws_ecs_cluster.cluster.id
   task_definition = aws_ecs_task_definition.task.arn
-  desired_count   = 0
+  desired_count   = var.desired_count
   launch_type     = "FARGATE"
 
   network_configuration {
-    subnets         = local.public_subnets
+    subnets         = [local.public_subnets[0]]
     security_groups = [aws_security_group.ecs_sg.id]
     assign_public_ip = true
   }

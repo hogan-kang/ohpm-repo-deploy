@@ -9,6 +9,9 @@ project         = "ohpm-repo"
 # Environment Configuration
 env             = "dev"
 
+# Desired count for ECS service in dev
+desired_count   = 1
+
 # Container Port: HTTP standard port 80
 container_port  = 80
 
