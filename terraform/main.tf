@@ -1,4 +1,4 @@
-// Fetch default VPC and subnets
+# Fetch default VPC and subnets
 data "aws_vpc" "default" {
   default = true
 }
@@ -10,11 +10,10 @@ data "aws_subnets" "default" {
   }
 }
 
-// Local variables
+# Local variables
 locals {
   name_prefix   = "${var.project}-${var.env}"
   vpc_id        = data.aws_vpc.default.id
-  public_subnets = data.aws_subnets.default.ids
 }
 
 # ECS Security Group
@@ -31,25 +30,25 @@ resource "aws_security_group" "ecs_sg" {
   }
 
   egress {
-    from_port = 0
-    to_port   = 0
-    protocol  = "-1"
+    from_port   = 0
+    to_port     = 0
+    protocol    = "-1"
     cidr_blocks = ["0.0.0.0/0"]
   }
 }
 
 # ECS IAM Role
 resource "aws_iam_role" "ecs_task_execution_role" {
-  name = "${local.name_prefix}-exec-role"
+  name               = "${local.name_prefix}-exec-role"
   assume_role_policy = data.aws_iam_policy_document.ecs_task_assume.json
 }
 
-// ECS task trust policy
+# ECS task trust policy
 data "aws_iam_policy_document" "ecs_task_assume" {
   statement {
     actions = ["sts:AssumeRole"]
     principals {
-      type = "Service"
+      type        = "Service"
       identifiers = ["ecs-tasks.amazonaws.com"]
     }
   }
@@ -69,25 +68,85 @@ resource "aws_ecs_cluster" "cluster" {
 # EFS File System
 resource "aws_efs_file_system" "app_efs" {
   creation_token = "${local.name_prefix}-efs"
-  
+
   lifecycle_policy {
     transition_to_ia = "AFTER_30_DAYS"
   }
 
   performance_mode = "generalPurpose"
-  throughput_mode = "elastic"
+  throughput_mode  = "elastic"
 
   tags = {
     Name = "${local.name_prefix}-efs"
   }
 }
 
-# EFS Mount Target 
+# NAT Gateway
+resource "aws_eip" "nat_eip" {
+  vpc = true
+}
+
+resource "aws_nat_gateway" "nat" {
+  allocation_id = aws_eip.nat_eip.id
+  subnet_id     = var.public_subnet_az1
+
+  tags = {
+    Name = "${local.name_prefix}-nat"
+  }
+}
+
+# Private Subnets
+resource "aws_subnet" "private_az1" {
+  vpc_id            = local.vpc_id
+  cidr_block        = var.private_subnet_cidr_az1
+  availability_zone = "${var.aws_region}a"
+
+  tags = {
+    Name = "${local.name_prefix}-private-az1"
+  }
+}
+
+resource "aws_subnet" "private_az2" {
+  vpc_id            = local.vpc_id
+  cidr_block        = var.private_subnet_cidr_az2
+  availability_zone = "${var.aws_region}b"
+
+  tags = {
+    Name = "${local.name_prefix}-private-az2"
+  }
+}
+
+# Private Route Table
+resource "aws_route_table" "private" {
+  vpc_id = local.vpc_id
+
+  route {
+    cidr_block     = "0.0.0.0/0"
+    nat_gateway_id = aws_nat_gateway.nat.id
+  }
+
+  tags = {
+    Name = "${local.name_prefix}-private-rt"
+  }
+}
+
+# Route Table Associations for Private Subnets
+resource "aws_route_table_association" "private_az1" {
+  subnet_id      = aws_subnet.private_az1.id
+  route_table_id = aws_route_table.private.id
+}
+
+resource "aws_route_table_association" "private_az2" {
+  subnet_id      = aws_subnet.private_az2.id
+  route_table_id = aws_route_table.private.id
+}
+
+# EFS Mount Target
 resource "aws_efs_mount_target" "efs_mount" {
-  count = 1
+  count = 2
 
   file_system_id  = aws_efs_file_system.app_efs.id
-  subnet_id       = local.public_subnets[0]
+  subnet_id       = count.index == 0 ? aws_subnet.private_az1.id : aws_subnet.private_az2.id
   security_groups = [aws_security_group.ecs_sg.id]
 }
 
@@ -110,7 +169,7 @@ resource "aws_ecs_task_definition" "task" {
   network_mode             = "awsvpc"
   requires_compatibilities = ["FARGATE"]
   execution_role_arn       = aws_iam_role.ecs_task_execution_role.arn
-  
+
   container_definitions = jsonencode([
     {
       name      = "${local.name_prefix}"
@@ -138,10 +197,10 @@ resource "aws_ecs_task_definition" "task" {
       ]
     }
   ])
-  
+
   volume {
     name = "efs-storage"
-    
+
     efs_volume_configuration {
       file_system_id = aws_efs_file_system.app_efs.id
       root_directory = "/"
@@ -158,8 +217,8 @@ resource "aws_ecs_service" "service" {
   launch_type     = "FARGATE"
 
   network_configuration {
-    subnets         = [local.public_subnets[0]]
-    security_groups = [aws_security_group.ecs_sg.id]
-    assign_public_ip = true
+    subnets          = [aws_subnet.private_az1.id, aws_subnet.private_az2.id]
+    security_groups  = [aws_security_group.ecs_sg.id]
+    assign_public_ip = false
   }
 }
