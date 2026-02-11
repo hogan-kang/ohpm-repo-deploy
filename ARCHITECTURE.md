@@ -4,80 +4,47 @@
 
 ```mermaid
 graph TB
-    Internet[Internet] -->|HTTPS Pending| ALB[ALB<br/>Not Available]
+    Internet[Internet] -->|HTTP:80| ALB[ALB<br/>Target Group]
 
-    subgraph VPC[VPC: vpc-07fb5a10e41318e7a]
-        subgraph PublicSubnets[Public Subnets]
-            PubSub1[ap-east-1a<br/>subnet-03b0f61a5d80d03e1]
-            PubSub2[ap-east-1b<br/>subnet-0ac9b826ce0116170]
-
-            NATGW[NAT Gateway<br/>nat-0182cc0f1f3275ffb]
+    subgraph VPC[VPC]
+        subgraph Public[Public Subnets]
+            ALB
+            NATGW[NAT Gateway]
             EIP[Elastic IP]
-
             EIP --> NATGW
-            NATGW -->|Outbound| Internet
-
-            PubSub1 --> NATGW
-            PubSub2 -.->|Reserved| PubSub2
         end
 
-        subgraph PrivateSubnets[Private Subnets]
-            PrivSub1[ap-east-1a<br/>subnet-09fa9fb721383b4be<br/>172.31.128.0/20]
-            PrivSub2[ap-east-1b<br/>subnet-0f95c02c7443c1db2<br/>172.31.144.0/20]
-
-            subgraph AZ1[Availability Zone 1]
-                Task1[ECS Task 1<br/>nginx:alpine<br/>Port: 80]
-                MountTarget1[EFS Mount Target 1<br/>fsmt-088acd9f62667062e]
-
-                Task1 -->|NFS:2049| MountTarget1
-                Task1 -.->|Outbound via NAT| NATGW
+        subgraph Private[Private Subnets]
+            subgraph AZ1[ap-east-1a]
+                Task1[Task 1<br/>nginx:alpine<br/>256vCPU/512MB]
+                MT1[Mount Target]
+                Task1 -->|NFS:2049| MT1
             end
 
-            subgraph AZ2[Availability Zone 2]
-                Task2[ECS Task 2<br/>nginx:alpine<br/>Port: 80]
-                MountTarget2[EFS Mount Target 2<br/>fsmt-0db9e68ca0c42ef6f]
-
-                Task2 -->|NFS:2049| MountTarget2
-                Task2 -.->|Outbound via NAT| NATGW
+            subgraph AZ2[ap-east-1b]
+                Task2[Task 2<br/>nginx:alpine<br/>256vCPU/512MB]
+                MT2[Mount Target]
+                Task2 -->|NFS:2049| MT2
             end
-
-            PrivSub1 --> AZ1
-            PrivSub2 --> AZ2
         end
 
-        subgraph Storage[Storage Layer]
-            EFS[EFS File System<br/>fs-058f67104d63dca7e<br/>Multi-AZ Storage]
-
-            MountTarget1 --> EFS
-            MountTarget2 --> EFS
-        end
-
-        subgraph Shared[Shared Services]
-            ECSCluster[ECS Cluster<br/>ohpm-repo-dev-cluster]
-            ECSService[ECS Service<br/>ohpm-repo-dev-service<br/>Desired: 2 tasks]
-            SG[Security Group<br/>ohpm-repo-dev-ecs-sg<br/>Ingress: TCP 80<br/>Egress: All]
-            IAMRole[IAM Role<br/>ohpm-repo-dev-exec-role]
-
-            Task1 -.->|Managed by| ECSService
-            Task2 -.->|Managed by| ECSService
-            ECSService -.->|Part of| ECSCluster
-
-            Task1 -.->|Protected by| SG
-            Task2 -.->|Protected by| SG
-            MountTarget1 -.->|Protected by| SG
-            MountTarget2 -.->|Protected by| SG
-
-            Task1 -.->|Uses| IAMRole
-            Task2 -.->|Uses| IAMRole
-        end
+        EFS[EFS Storage<br/>Regional Resource]
     end
 
-    style Internet fill:#f9f,stroke:#333,stroke-width:2px
-    style ALB fill:#f66,stroke:#f00,stroke-width:2px
-    style NATGW fill:#9f9,stroke:#333,stroke-width:2px
-    style EFS fill:#ff9,stroke:#333,stroke-width:2px
-    style Task1 fill:#99f,stroke:#333,stroke-width:2px
-    style Task2 fill:#99f,stroke:#333,stroke-width:2px
+    MT1 --> EFS
+    MT2 --> EFS
+
+    ALB -->|Forward| Task1
+    ALB -->|Forward| Task2
+
+    Task1 -.->|Outbound| NATGW --> Internet
+    Task2 -.->|Outbound| NATGW --> Internet
+
+    style ALB fill:#9f9
+    style EFS fill:#ff9
+    style NATGW fill:#9f9
+    style Task1 fill:#99f
+    style Task2 fill:#99f
 ```
 
 ## Network Architecture
@@ -86,7 +53,6 @@ graph TB
 graph LR
     subgraph Internet[Internet]
         DockerHub[Docker Hub]
-        ECRPublic[ECR Public]
     end
 
     subgraph PrivateAZ1[ap-east-1a - Private]
@@ -104,9 +70,6 @@ graph LR
 
     Task1 -->|Image Pull| NAT --> IGW --> DockerHub
     Task2 -->|Image Pull| NAT --> IGW --> DockerHub
-
-    Task1 -.->|Optional| ECRPublic
-    Task2 -.->|Optional| ECRPublic
 
     style DockerHub fill:#4CAF50,stroke:#333,stroke-width:2px,color:#fff
     style NAT fill:#FF9800,stroke:#333,stroke-width:2px
@@ -154,13 +117,17 @@ graph TB
     end
 
     subgraph Security[Security Layer]
-        SG[Security Group<br/>ohpm-repo-dev-ecs-sg<br/>sg-01485d4d93afcaa14]
+        ALBSG[ALB Security Group<br/>ohpm-repo-dev-alb-sg]
+        SG[ECS Security Group<br/>ohpm-repo-dev-ecs-sg]
 
-        Ingress[Inbound Rules<br/>TCP: 80 from 0.0.0.0/0]
+        ALBIngress[ALB Inbound<br/>TCP: 80 from 0.0.0.0/0]
+        ECSIngress[ECS Inbound<br/>TCP: 80 from ALB SG]
         Egress[Outbound Rules<br/>All traffic to 0.0.0.0/0]
 
-        SG --> Ingress
+        ALBSG --> ALBIngress
+        SG --> ECSIngress
         SG --> Egress
+        ALBSG -.-> Egress
     end
 
     subgraph IAM[IAM & Permissions]
@@ -170,17 +137,20 @@ graph TB
 
         Role --> Policy
 
-        ECR[ECR Pull<br/>DockerHub Access<br/>CloudWatch Logs]
+        Permissions[DockerHub Access<br/>CloudWatch Logs<br/>EFS Mount]
     end
 
     Task1 -->|Protected by| SG
     Task2 -->|Protected by| SG
+    ALBSG -.->|Protects ALB| ALB
+    ALBSG -->|Allows traffic to| SG
 
     Task1 -->|Assumes| Role
     Task2 -->|Assumes| Role
 
-    Role -->|Allows| ECR
+    Role -->|Allows| Permissions
 
+    style ALBSG fill:#FF5722,stroke:#333,stroke-width:2px,color:#fff
     style SG fill:#9C27B0,stroke:#333,stroke-width:2px,color:#fff
     style Role fill:#3F51B5,stroke:#333,stroke-width:2px,color:#fff
 ```
@@ -216,7 +186,8 @@ graph TB
 ### Security & IAM
 | Component | ID/Name | Purpose |
 |-----------|---------|---------|
-| Security Group | sg-01485d4d93afcaa14 | ECS + EFS (ohpm-repo-dev-ecs-sg) |
+| ALB Security Group | ohpm-repo-dev-alb-sg | Inbound: TCP 80 from internet |
+| ECS Security Group | ohpm-repo-dev-ecs-sg | Inbound: TCP 80 from ALB SG only |
 | IAM Role | ohpm-repo-dev-exec-role | ECS task execution role |
 
 ## Traffic Flow
@@ -237,26 +208,30 @@ sequenceDiagram
     NAT-->>Task: Complete Pull
 ```
 
-### Inbound Traffic (Pending)
+### Inbound Traffic (Working)
 ```mermaid
 sequenceDiagram
     participant User as Internet User
-    participant ALB as ALB<br/>(Not Available)
+    participant ALB as ALB<br/>ohpm-repo-dev-alb
     participant ECS as ECS Task
     participant EFS as EFS Storage
 
-    User->>ALB: HTTPS Request
-    Note over ALB: ⚠️ Quota Not Approved
-    ALB-xECS: Cannot Forward
-    ECS-xEFS: Cannot Serve
+    User->>ALB: HTTP Request (Port 80)
+    ALB->>ECS: Forward to Target Group
+    ECS->>EFS: Read/Write Data
+    EFS-->>ECS: Data Response
+    ECS-->>ALB: HTTP Response
+    ALB-->>User: Return Response
 ```
 
-**Status**: ALB quota not approved. Waiting for AWS Support approval.
+**Status**: ALB deployed and functional. Traffic flows from internet → ALB → ECS tasks → EFS storage.
 
 ## Cost Considerations
 
 | Service | Monthly Cost (Approx) | Free Tier |
 |---------|---------------------|-----------|
+| ALB (Application Load Balancer) | ~$0.025/hour = ~$18/month | Not covered |
+| ALB LCU (Load Balancer Capacity Units) | ~$0.008/LCU-hour | Not covered |
 | NAT Gateway | ~$32.00 | Not covered |
 | EIP | ~$2.50 | Not covered |
 | EFS | ~$0.30/GB-Month | Covered (First 5GB) |
@@ -265,10 +240,11 @@ sequenceDiagram
 
 ## Next Steps
 
-1. **Apply for ALB quota** - Submit request to AWS Support
-2. **Add ALB** - Once approved, deploy Application Load Balancer
-3. **Configure Route 53** - Set up domain name
-4. **Update ECS Service** - Attach target group to ALB
+1. ~~**Apply for ALB quota**~~ - ✅ Completed
+2. ~~**Add ALB**~~ - ✅ Deployed
+3. **Configure HTTPS** - Add SSL certificate and HTTPS listener
+4. **Configure Route 53** - Set up custom domain name
+5. **Deploy OHPM repo** - Replace nginx with actual OHPM repository application
 
 ## Terraform Resources
 
@@ -280,7 +256,9 @@ All resources are managed via Terraform:
 
 ## Notes
 
+- **ALB**: Public load balancer distributing traffic to ECS tasks across AZs
 - **NAT Gateway**: Required for ECS tasks in private subnets to access Docker Hub
 - **EFS**: Multi-AZ storage with automatic replication
 - **Docker Hub**: Currently testing NAT Gateway connectivity with `nginx:alpine`
-- **Security**: ECS tasks have no public IP (assign_public_ip = false)
+- **Security**: ECS tasks have no public IP (assign_public_ip = false), only accessible via ALB
+- **Security Groups**: ECS security group only allows traffic from ALB security group, enhancing security

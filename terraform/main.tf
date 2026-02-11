@@ -22,11 +22,12 @@ resource "aws_security_group" "ecs_sg" {
   description = "ECS and EFS security group"
   vpc_id      = local.vpc_id
 
+  # Allow traffic from ALB
   ingress {
-    from_port   = var.container_port
-    to_port     = var.container_port
-    protocol    = "tcp"
-    cidr_blocks = ["0.0.0.0/0"]
+    from_port       = var.container_port
+    to_port         = var.container_port
+    protocol        = "tcp"
+    security_groups  = [aws_security_group.alb_sg.id]
   }
 
   egress {
@@ -161,6 +162,83 @@ resource "aws_security_group_rule" "efs_ingress" {
   description       = "NFS for EFS"
 }
 
+# ALB Security Group
+resource "aws_security_group" "alb_sg" {
+  name        = "${local.name_prefix}-alb-sg"
+  description = "ALB security group"
+  vpc_id      = local.vpc_id
+
+  ingress {
+    description = "HTTP from internet"
+    from_port   = 80
+    to_port     = 80
+    protocol    = "tcp"
+    cidr_blocks = ["0.0.0.0/0"]
+  }
+
+  egress {
+    description = "All outbound"
+    from_port   = 0
+    to_port     = 0
+    protocol    = "-1"
+    cidr_blocks = ["0.0.0.0/0"]
+  }
+}
+
+# ALB
+resource "aws_lb" "app_alb" {
+  name               = "${local.name_prefix}-alb"
+  internal           = false
+  load_balancer_type = "application"
+  security_groups    = [aws_security_group.alb_sg.id]
+  subnets           = [var.public_subnet_az1, var.public_subnet_az2]
+
+  enable_deletion_protection = false
+
+  tags = {
+    Name = "${local.name_prefix}-alb"
+  }
+}
+
+# ALB Target Group
+resource "aws_lb_target_group" "app_tg" {
+  name        = "${local.name_prefix}-tg"
+  port        = var.container_port
+  protocol    = "HTTP"
+  vpc_id      = local.vpc_id
+  target_type = "ip"
+
+  health_check {
+    enabled             = true
+    path                = "/"
+    healthy_threshold   = 2
+    unhealthy_threshold = 2
+    interval            = 30
+    timeout             = 5
+    matcher             = "200"
+  }
+
+  tags = {
+    Name = "${local.name_prefix}-tg"
+  }
+}
+
+# ALB Listener
+resource "aws_lb_listener" "app_listener" {
+  load_balancer_arn = aws_lb.app_alb.arn
+  port              = "80"
+  protocol          = "HTTP"
+
+  default_action {
+    type             = "forward"
+    target_group_arn = aws_lb_target_group.app_tg.arn
+  }
+
+  tags = {
+    Name = "${local.name_prefix}-listener"
+  }
+}
+
 # ECS Task Definition
 resource "aws_ecs_task_definition" "task" {
   family                   = "${local.name_prefix}-task"
@@ -221,4 +299,41 @@ resource "aws_ecs_service" "service" {
     security_groups  = [aws_security_group.ecs_sg.id]
     assign_public_ip = false
   }
+
+  load_balancer {
+    target_group_arn = aws_lb_target_group.app_tg.arn
+    container_name   = "${local.name_prefix}"
+    container_port   = var.container_port
+  }
+
+  # ALB dependency
+  depends_on = [
+    aws_lb_listener.app_listener
+  ]
+}
+
+# Outputs
+output "alb_dns_name" {
+  description = "DNS name of the Application Load Balancer"
+  value       = aws_lb.app_alb.dns_name
+}
+
+output "alb_url" {
+  description = "URL to access the application via ALB"
+  value       = "http://${aws_lb.app_alb.dns_name}"
+}
+
+output "ecs_cluster_name" {
+  description = "Name of the ECS Cluster"
+  value       = aws_ecs_cluster.cluster.name
+}
+
+output "efs_id" {
+  description = "ID of the EFS file system"
+  value       = aws_efs_file_system.app_efs.id
+}
+
+output "target_group_arn" {
+  description = "ARN of the ALB Target Group"
+  value       = aws_lb_target_group.app_tg.arn
 }
