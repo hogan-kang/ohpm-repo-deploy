@@ -24,8 +24,7 @@ COPY --from=builder /tmp/ohpm-repo /opt/ohpm-repo/
 
 # 复制启动脚本
 COPY docker-entrypoint.sh /usr/local/bin/
-COPY docker-entrypoint-as-node.sh /usr/local/bin/
-RUN chmod +x /usr/local/bin/docker-entrypoint.sh /usr/local/bin/docker-entrypoint-as-node.sh
+RUN chmod +x /usr/local/bin/docker-entrypoint.sh
 
 # 将 ohpm-repo 添加到系统 PATH
 ENV PATH="/opt/ohpm-repo/bin:${PATH}"

@@ -12,10 +12,19 @@ if [ "$(id -u)" = "0" ]; then
     chown -R node:node /data/ohpm-repo 2>/dev/null || true
     chmod -R 755 /data/ohpm-repo 2>/dev/null || true
     echo "Switching to node user (UID 1000)..."
-    exec su-exec node /usr/local/bin/docker-entrypoint-as-node.sh "$@"
+    # 传递一个标志参数告诉脚本已经是 node 用户
+    exec su-exec node "$0" --as-node "$@"
 fi
 
-# 以下是 node 用户执行的逻辑
+# 检查是否是以 node 用户身份运行
+if [ "$1" != "--as-node" ]; then
+    echo "Error: Script should be called with --as-node flag when running as node user"
+    exit 1
+fi
+
+# 移除 --as-node 参数
+shift
+
 # 进入安装目录（程序文件）
 cd /opt/ohpm-repo
 
