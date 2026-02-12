@@ -12,12 +12,11 @@ env = "dev"
 # Desired count for ECS service in dev
 desired_count = 2
 
-# Container Port: HTTP standard port 80
-container_port = 80
+# Container Port: OHPM repo default port
+container_port = 8088
 
-# Docker Image: nginx:alpine from Docker Hub
-# Test NAT Gateway connectivity
-container_image = "nginx:alpine"
+# Docker Image: OHPM repo from GitHub Container Registry
+container_image = "ghcr.io/hogan-kang/ohpm-repo:latest"
 
 # Multi-AZ Subnet Configuration
 # Public subnets (for NAT Gateway) - Using AWS default public subnets

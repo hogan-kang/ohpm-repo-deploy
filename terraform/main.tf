@@ -61,6 +61,12 @@ resource "aws_iam_role_policy_attachment" "ecs_task_execution_attach" {
   policy_arn = "arn:aws:iam::aws:policy/service-role/AmazonECSTaskExecutionRolePolicy"
 }
 
+# Add EFS access policy
+resource "aws_iam_role_policy_attachment" "ecs_task_execution_efs" {
+  role       = aws_iam_role.ecs_task_execution_role.name
+  policy_arn = "arn:aws:iam::aws:policy/AmazonElasticFileSystemClientFullAccess"
+}
+
 # ECS Cluster
 resource "aws_ecs_cluster" "cluster" {
   name = "${local.name_prefix}-cluster"
@@ -148,18 +154,75 @@ resource "aws_efs_mount_target" "efs_mount" {
 
   file_system_id  = aws_efs_file_system.app_efs.id
   subnet_id       = count.index == 0 ? aws_subnet.private_az1.id : aws_subnet.private_az2.id
-  security_groups = [aws_security_group.ecs_sg.id]
+  security_groups = [aws_security_group.efs_sg.id]
 }
 
-# NFS Security Group Rule
-resource "aws_security_group_rule" "efs_ingress" {
+# EFS Security Group
+resource "aws_security_group" "efs_sg" {
+  name        = "${local.name_prefix}-efs-sg"
+  description = "EFS security group"
+  vpc_id      = local.vpc_id
+
+  ingress {
+    description = "NFS from VPC"
+    from_port   = 2049
+    to_port     = 2049
+    protocol    = "tcp"
+    cidr_blocks = ["0.0.0.0/0"]
+  }
+
+  egress {
+    from_port   = 0
+    to_port     = 0
+    protocol    = "-1"
+    cidr_blocks = ["0.0.0.0/0"]
+  }
+}
+
+# EFS Access Point for non-root user (node user typically has UID 1000)
+resource "aws_efs_access_point" "app_access_point" {
+  file_system_id = aws_efs_file_system.app_efs.id
+
+  root_directory {
+    path = "/"
+    creation_info {
+      owner_gid   = 1000
+      owner_uid   = 1000
+      permissions = "755"
+    }
+  }
+
+  posix_user {
+    gid            = 1000
+    secondary_gids = []
+    uid            = 1000
+  }
+
+  tags = {
+    Name = "${local.name_prefix}-efs-ap"
+  }
+}
+
+# NFS Security Group Rule - Allow ECS to access EFS
+resource "aws_security_group_rule" "efs_ingress_from_vpc" {
   type              = "ingress"
   from_port         = 2049
   to_port           = 2049
   protocol          = "tcp"
-  cidr_blocks       = ["0.0.0.0/0"]
+  cidr_blocks       = ["172.31.0.0/16"]  # VPC CIDR
   security_group_id = aws_security_group.ecs_sg.id
-  description       = "NFS for EFS"
+  description       = "Allow NFS from VPC to EFS"
+}
+
+# Allow EFS access from the security group itself (for EFS mount)
+resource "aws_security_group_rule" "ecs_sg_self_efs" {
+  type              = "ingress"
+  from_port         = 2049
+  to_port           = 2049
+  protocol          = "tcp"
+  self              = true
+  security_group_id = aws_security_group.ecs_sg.id
+  description       = "Allow EFS access from security group"
 }
 
 # ALB Security Group
@@ -202,11 +265,15 @@ resource "aws_lb" "app_alb" {
 
 # ALB Target Group
 resource "aws_lb_target_group" "app_tg" {
-  name        = "${local.name_prefix}-tg"
+  name_prefix = "ohpm-"
   port        = var.container_port
   protocol    = "HTTP"
   vpc_id      = local.vpc_id
   target_type = "ip"
+
+  lifecycle {
+    create_before_destroy = true
+  }
 
   health_check {
     enabled             = true
@@ -263,16 +330,14 @@ resource "aws_ecs_task_definition" "task" {
       mountPoints = [
         {
           sourceVolume  = "efs-storage"
-          containerPath = "/usr/share/nginx/html"
+          containerPath = "/data/ohpm-repo"
           readOnly      = false
         }
       ]
       stopTimeout = 30
-      command = [
-        "sh",
-        "-c",
-        "echo '<html><body><h1>Hello from EFS!</h1><p>Test page created at: $(date)</p></body></html>' > /usr/share/nginx/html/index.html && nginx -g 'daemon off;'"
-      ]
+      linuxParameters = {
+        initProcessEnabled = true
+      }
     }
   ])
 
@@ -280,8 +345,9 @@ resource "aws_ecs_task_definition" "task" {
     name = "efs-storage"
 
     efs_volume_configuration {
-      file_system_id = aws_efs_file_system.app_efs.id
-      root_directory = "/"
+      file_system_id     = aws_efs_file_system.app_efs.id
+      root_directory      = "/"
+      transit_encryption  = "ENABLED"
     }
   }
 }
@@ -310,6 +376,10 @@ resource "aws_ecs_service" "service" {
   depends_on = [
     aws_lb_listener.app_listener
   ]
+
+  lifecycle {
+    ignore_changes = [task_definition]
+  }
 }
 
 # Outputs
