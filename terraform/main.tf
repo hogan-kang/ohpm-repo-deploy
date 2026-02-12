@@ -318,7 +318,7 @@ resource "aws_ecs_task_definition" "task" {
   container_definitions = jsonencode([
     {
       name      = "${local.name_prefix}"
-      image     = var.container_image
+      image     = "${var.container_image}:${var.image_tag}"
       essential = true
       portMappings = [
         {

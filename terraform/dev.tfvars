@@ -16,7 +16,8 @@ desired_count = 2
 container_port = 8088
 
 # Docker Image: OHPM repo from GitHub Container Registry
-container_image = "ghcr.io/hogan-kang/ohpm-repo:latest"
+container_image = "ghcr.io/hogan-kang/ohpm-repo"
+image_tag = "8214d35"  # Current commit SHA
 
 # Multi-AZ Subnet Configuration
 # Public subnets (for NAT Gateway) - Using AWS default public subnets

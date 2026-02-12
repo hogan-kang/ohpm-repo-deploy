@@ -63,3 +63,9 @@ variable "container_image" {
   type        = string
   default     = "nginx:alpine"
 }
+
+variable "image_tag" {
+  description = "Docker image tag"
+  type        = string
+  default     = "latest"
+}
