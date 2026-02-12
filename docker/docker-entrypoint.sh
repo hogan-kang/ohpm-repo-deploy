@@ -6,15 +6,16 @@ echo "Version: 5.4.4.0"
 echo "Install directory: /opt/ohpm-repo"
 echo "Deploy directory: /data/ohpm-repo"
 
-# 以 root 执行：修改 EFS 目录权限
+# 以 root 执行：修改 EFS 目录权限并切换到 node 用户
 if [ "$(id -u)" = "0" ]; then
     echo "Running as root, adjusting EFS permissions..."
     chown -R node:node /data/ohpm-repo 2>/dev/null || true
     chmod -R 755 /data/ohpm-repo 2>/dev/null || true
     echo "Switching to node user (UID 1000)..."
-    exec su-exec node "$0" "$@"
+    exec su-exec node /usr/local/bin/docker-entrypoint-as-node.sh "$@"
 fi
 
+# 以下是 node 用户执行的逻辑
 # 进入安装目录（程序文件）
 cd /opt/ohpm-repo
 
